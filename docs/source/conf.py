@@ -17,7 +17,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'STOMPy'
+project = 'STOMPyMQ'
 copyright = '2022, Igor Mandrichenko'
 author = 'Igor Mandrichenko'
 
