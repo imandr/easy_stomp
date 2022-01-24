@@ -1,6 +1,6 @@
 from socket import *
 import sys, uuid
-from stomp import STOMPStream, STOMPFrame, AckMode
+from stompy import STOMPStream, STOMPFrame, AckMode
 from pythreader import PyThread, Primitive, DEQueue, synchronized, TaskQueue, Task
 
 class Subscription(Primitive):
@@ -160,10 +160,11 @@ class Client(Task):
     
     @synchronized
     def send_message(self, subscription, frame):
-        headers = frame.headers()
+        headers = frame.headers()       # this will make a copy, so we can modify headers here without affecting the original frame
         if "message-id" not in headers:
             headers["message-id"] = self.next_id("m")
         headers["subscription"] = subscription.ID
+        if "receipt" in headers:    del headers["receipt"]
         if subscription.AckMode != AckMode.Auto:
             ack_id = self.next_id("a")
             headers["ack"] = ack_id
@@ -244,7 +245,7 @@ class Client(Task):
 
         else:
             receipt = frame.get("receipt")
-            
+
             if self.process_transaction(frame):
                 pass
             elif frame.Command == "ACK":
@@ -277,6 +278,8 @@ class Client(Task):
 
             if self.Connected and receipt:
                 self.send(STOMPFrame("RECEIPT", headers={"receipt-id":receipt}))
+            
+
 
 class Broker(PyThread):
     
@@ -332,10 +335,29 @@ class Broker(PyThread):
         for s in subscriptions:
             for f in s.unacked():
                 self.nack(f)
-
-if __name__ == "__main__":
-    import yaml
-    config = yaml.load(open(sys.argv[1], "r"), Loader = yaml.SafeLoader)
+                
+def main():
+    import yaml, os, getopt
+    Usage = """
+    Usage: 
+    $ stompy_broker [-c <config.yaml>]
+        if -c is missing environment variable STOMPY_BROKER_CFG will be used
+    """
+    
+    opts, args = getopt.getopt(sys.argv[1:], "c:h?")
+    opts = dict(opts)
+    if "-h" in opts or "-?" in opts:
+        print(Usage)
+        sys.exit(2)
+    config = opts.get("-c") or os.environ.get("STOMPY_BROKER_CFG")
+    if not config or not os.path.isfile(config):
+        print(Usage)
+        sys.exit(2)
+    config = yaml.load(open(config, "r"), Loader = yaml.SafeLoader)
     broker = Broker(config)
     broker.start()
     broker.join()
+    
+
+if __name__ == "__main__":
+    main()

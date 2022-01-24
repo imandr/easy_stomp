@@ -1,6 +1,7 @@
 import uuid
 from enum import Enum
 from .util import to_str, to_bytes
+from pythreader import Primitive, synchronized
 
 class AckMode(Enum):
     Auto = "auto"
@@ -92,7 +93,7 @@ class STOMPFrame(object):
         self.Received = False
         
     def __str__(self):
-        return f"STOPMFrame(cmd={self.Command}, headres={self.Headers}, body={self.Body})"
+        return f"STOPMFrame(cmd={self.Command}, headers={self.Headers}, body={self.Body})"
 
     def to_bytes(self):
         parts = [self.Command]
@@ -106,7 +107,20 @@ class STOMPFrame(object):
         
     def headers(self):
         return self.Headers.copy()
-        
+
+    @property
+    def text(self, encoding=None):
+        if encoding is None:
+            content_type = self.get("content-type")
+            if content_type and "charset=" in content_type:
+                words = content_type.split(';')
+                for w in words:
+                    w = w.strip()
+                    if w.startswith("charset="):
+                        encoding = w.split('=', 1)[1]
+        encoding = encoding or "utf-8"
+        return self.Body.decode(encoding)
+
     #
     # dict interface, headers access
     #
@@ -119,9 +133,10 @@ class STOMPFrame(object):
     def __contains__(self, name):
         return name in self.Headers
         
-class STOMPStream(object):
+class STOMPStream(Primitive):
     
     def __init__(self, sock, read_size=4096):
+        Primitive.__init__(self)
         self.Sock = sock
         self.Buf = b""
         self.ReadSize = read_size
@@ -129,6 +144,7 @@ class STOMPStream(object):
     def send(self, frame):
         self.Sock.sendall(frame.to_bytes())
         
+    @synchronized
     def recv(self):
         parser = FrameParser()
         eof = False

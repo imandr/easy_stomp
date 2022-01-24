@@ -1,7 +1,7 @@
 import time
 import sys
 
-from client import STOMPClient
+from stompy import STOMPClient
 
 client = STOMPClient()
 client.connect(("127.0.0.1", 61613), 'admin', 'password')

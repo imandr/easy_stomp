@@ -1,0 +1,2 @@
+port: 61613
+max_clients: 250

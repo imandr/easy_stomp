@@ -2,7 +2,7 @@ import time
 import sys
 from pythreader import Primitive
 
-from client import STOMPClient
+from stompy import STOMPClient
 
 class Listener(Primitive):
     
