@@ -3,6 +3,6 @@ STOMP Client
 
 Client is the client class
 
-    .. autoclass:: stomp.STOMPClient
+    .. autoclass:: stompy.STOMPClient
        :members:
        :noindex:
