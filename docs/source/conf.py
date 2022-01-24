@@ -24,10 +24,8 @@ author = 'Igor Mandrichenko'
 import sys, os.path
 sys.path.insert(0, os.path.abspath('../..'))
 
-print(sys.path)
 
-import stomp
-print(stomp.__file__)
+import stompy
 
 # -- General configuration ---------------------------------------------------
 
