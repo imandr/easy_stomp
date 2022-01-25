@@ -1,4 +1,4 @@
-import uuid
+import uuid, time
 from enum import Enum
 from .util import to_str, to_bytes
 from pythreader import Primitive, synchronized
@@ -26,7 +26,7 @@ class STOMPError(Exception):
                 + "\n- end of frame --------------\n"
         return out
 
-class STOMPTiemout(Exception):
+class STOMPTimeout(Exception):
     
     def __str__(self):
         return "STOMP timeout"

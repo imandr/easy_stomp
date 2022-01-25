@@ -356,7 +356,7 @@ class STOMPClient(Primitive):
                 done = True
         return frame
 
-    def loop(self, transaction=None, timeout=timeout):
+    def loop(self, transaction=None, timeout=None):
         """
         Run the client in the loop, receiving frames by the broker and sending them to the client callbacks.
         The loop will break once a callback retruns string "stop"
@@ -409,8 +409,9 @@ class STOMPClient(Primitive):
         Send DISCONNECT frame, wait for receipt and close the connection.
         """
         if self.Connected:
-            receipt = self.send("DISCONNECT", receipt=True)
-            self.wait_for_receipt(receipt)
+            self.send("DISCONNECT")
+            print("loop...")
+            self.loop()
             self.close()
 
     @synchronized
