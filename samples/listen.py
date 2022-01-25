@@ -18,4 +18,4 @@ port = int(port)
 client = connect((host, port))
 client.subscribe(dest)
 for frame in client:
-    print("<<< {frame.text}")
+    print(f"received: {frame.text}")

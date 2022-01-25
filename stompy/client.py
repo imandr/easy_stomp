@@ -285,6 +285,7 @@ class STOMPClient(Primitive):
             promise = self.ReceiptPromises[receipt] = Promise(receipt)
         frame = STOMPFrame(command, headers=h, body=to_bytes(body))
         self.Stream.send(frame)
+        print("sent:", frame)
         return promise
         
     def message(self, destination, body=b"", id=None, headers={}, receipt=False,
@@ -315,6 +316,14 @@ class STOMPClient(Primitive):
             if cb(self, frame) == "stop":
                 return "stop"
 
+    def process_receipt(self, frame):
+        if frame.Command == "RECEIPT":
+            receipt = frame["receipt-id"]
+            promise = self.ReceiptPromises.pop(receipt, None)
+            if promise is not None:
+                #print("Client.recv: promise fulfilled:", receipt)
+                promise.complete(frame)
+
     @synchronized
     def recv(self, transaction=None, timeout=None):
         """
@@ -335,28 +344,19 @@ class STOMPClient(Primitive):
                 # EOF
                 self.close()
                 return None
-            elif frame.Command == "RECEIPT":
-                receipt = frame["receipt-id"]
-                promise = self.ReceiptPromises.pop(receipt, None)
-                if promise is not None:
-                    #print("Client.recv: promise fulfilled:", receipt)
-                    promise.complete(frame)
-                else:
-                    #print(f"Client.recv: promise for {receipt} not found")
-                    #print("   promises:", [(k, p.Data) for k, p in self.ReceiptPromises.items()])
-                    pass
             elif frame.Command == "ERROR":
                 raise STOMPError(frame.get("message", ""), frame)
-            else:
-                if frame.Command == "MESSAGE" and "ack" in frame:
-                    sub_id = frame["subscription"]
-                    subscription = self.Subscriptions.get(sub_id)
-                    if subscription is None or subscription.SendAcks:
-                        self.ack(frame["ack"], transaction)
-                done = True
+            elif frame.Command == "RECEIPT":
+                self.process_receipt(frame)
+            if frame.Command == "MESSAGE" and "ack" in frame:
+                sub_id = frame["subscription"]
+                subscription = self.Subscriptions.get(sub_id)
+                if subscription is None or subscription.SendAcks:
+                    self.ack(frame["ack"], transaction)
+            done = True
         return frame
 
-    def loop(self, transaction=None, timeout=None):
+    def loop(self, transaction=None, timeout=None, until=None):
         """
         Run the client in the loop, receiving frames by the broker and sending them to the client callbacks.
         The loop will break once a callback retruns string "stop"
@@ -364,11 +364,15 @@ class STOMPClient(Primitive):
         frame = 1
         while frame is not None:
             frame = self.recv(transaction=transaction, timeout=timeout)
+            #print("loop: frame:", frame)
             if frame is not None:
-                if self.callback(frame) == "stop":
-                    break
+                stop = self.callback(frame) == "stop"
+                if not stop and until is not None:
+                    stop = until(frame)
+                    #print("loop(): until->", stop)
+                if stop:    break
         return frame
-
+        
     def nack(self, ack_id, transaction=None):
         """
         Send NACK frame
@@ -409,9 +413,8 @@ class STOMPClient(Primitive):
         Send DISCONNECT frame, wait for receipt and close the connection.
         """
         if self.Connected:
-            self.send("DISCONNECT")
-            print("loop...")
-            self.loop()
+            promise = self.send("DISCONNECT", receipt=True)
+            self.loop(until = lambda _: promise.is_complete())
             self.close()
 
     @synchronized

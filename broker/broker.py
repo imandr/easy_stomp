@@ -80,7 +80,13 @@ class ClientReader(PyThread):
         
     def stop(self):
         self.Stop = True
-    
+        
+    @synchronized
+    def close(self):
+        if self.Stream is not None:
+            self.Stream.close()
+            self.Stream = None
+            
 class ClientWriter(PyThread):
     
     def __init__(self, client, sock):
@@ -131,8 +137,10 @@ class Client(Task):
         self.Reader.start()
         self.Writer.start()
         self.Writer.join()
-        self.Sock.close()
+        self.Reader.close()
         self.Reader.join()
+        try:    self.Sock.close()
+        except: pass
         self.Broker.remove_client(self)
         self.Reader = self.Writer = None
         with self.Broker:
@@ -269,8 +277,9 @@ class Client(Task):
                 except KeyError:
                     pass
             elif frame.Command == "DISCONNECT":
-                receipt = frame["receipt"]
-                self.send(STOMPFrame("RECEIPT", headers={"receipt-id":receipt}))
+                receipt = frame.get("receipt")
+                if receipt:
+                    self.send(STOMPFrame("RECEIPT", headers={"receipt-id":receipt}))
                 self.disconnect()
             else:
                 self.error(f"Protocol error. Unrecognized or invalid command {frame.Command}", original_frame=frame)
@@ -278,8 +287,6 @@ class Client(Task):
 
             if self.Connected and receipt:
                 self.send(STOMPFrame("RECEIPT", headers={"receipt-id":receipt}))
-            
-
 
 class Broker(PyThread):
     
@@ -289,10 +296,23 @@ class Broker(PyThread):
         self.Port = config.get("port", 61613)
         max_clients = config.get("max_clients", 250)
         self.Clients = TaskQueue(max_clients)
+        self.MaxUndelivered = config.get("max_undelivered", 100)
+        self.Undelivered = {}                       # {dest -> [undelivered frames]}
+
+    @synchronized
+    def add_undelivered(self, frame):
+        assert frame.Command == "SEND"
+        dest = frame["destination"]
+        lst = self.Undelivered.setdefault(dest, [])
+        lst.append(frame)
+        while len(lst) > self.MaxUndelivered:
+            lst.pop(0)
 
     @synchronized
     def add_subscription(self, subscription):
         self.SubscriptionsByDest.setdefault(subscription.Destination, []).append(subscription)
+        for frame in self.Undelivered.get(subscription.Destination, []):
+            self.route(frame)
 
     @synchronized
     def remove_subscription(self, subscription):
@@ -311,6 +331,8 @@ class Broker(PyThread):
             s = subscriptions.pop(0)        # round-robin
             subscriptions.append(s)
             s.send_message(frame)
+        else:
+            self.add_undelivered(frame)
 
     @synchronized
     def nack(self, frame):
