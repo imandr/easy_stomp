@@ -2,6 +2,7 @@ import uuid
 from enum import Enum
 from .util import to_str, to_bytes
 from pythreader import Primitive, synchronized
+from socket import timeout as socket_timeout
 
 class AckMode(Enum):
     Auto = "auto"
@@ -25,6 +26,11 @@ class STOMPError(Exception):
                 + "\n- end of frame --------------\n"
         return out
 
+class STOMPTiemout(Exception):
+    
+    def __str__(self):
+        return "STOMP timeout"
+
 class FrameParser(object):
     
     def __init__(self):
@@ -46,7 +52,7 @@ class FrameParser(object):
     def process(self, buf):
         while self.Command is None and buf:
             line, buf = self.read_line(buf)
-            if line:
+            if line:        # A valid frame may be preceeded by a number of empty lines, sent as heart-beats
                 self.Command = line
                 
         while not self.HeadReceived and buf:
@@ -140,26 +146,39 @@ class STOMPStream(Primitive):
         self.Sock = sock
         self.Buf = b""
         self.ReadSize = read_size
-        
+        self.LastHearbeat = 0
+
     def send(self, frame):
         self.Sock.sendall(frame.to_bytes())
-        
+
     @synchronized
-    def recv(self):
-        parser = FrameParser()
-        eof = False
-        frame = None        
-        while not eof and frame is None:
-            buf = self.Buf
-            if not buf: 
-                try:    buf = self.Sock.recv(self.ReadSize)
-                except: buf = b""
-            if not buf: 
-                return None     # eof
-            self.Buf = parser.process(buf)
-            frame = parser.Frame
-        return frame
-    
+    def recv(self, timeout=None):
+        saved_timeout = self.Sock.gettimeout()
+        try:
+            if timeout is not None:
+                self.Sock.settimeout(timeout)
+            parser = FrameParser()
+            frame = None
+            eof = False
+            while not eof and frame is None:
+                buf = self.Buf
+                if not buf: 
+                    try:    
+                        buf = self.Sock.recv(self.ReadSize)
+                    except socket_timeout:
+                        raise STOMPTimeout()
+                    except:
+                        buf = b""
+                    self.LastHeartBeat = time.time()
+                if not buf: 
+                    eof = True     # eof
+                else:
+                    self.Buf = parser.process(buf)
+                    frame = parser.Frame
+            return frame
+        finally:
+            self.Sock.settimeout(saved_timeout)
+
     def __iter__(self):
         return self
         
