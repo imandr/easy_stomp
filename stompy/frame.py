@@ -177,7 +177,8 @@ class STOMPStream(Primitive):
                     frame = parser.Frame
             return frame
         finally:
-            self.Sock.settimeout(saved_timeout)
+            try:    self.Sock.settimeout(saved_timeout)
+            except: pass        # probably already closed
 
     def __iter__(self):
         return self
@@ -188,3 +189,7 @@ class STOMPStream(Primitive):
             raise StopIteration()
         else:
             return frame
+
+    def close(self):
+        try:    self.Sock.close()
+        except: pass
