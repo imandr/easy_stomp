@@ -165,7 +165,7 @@ class STOMPClient(Primitive):
                 continue
             else:   break
         else:
-            raise STOMPError(f"Can not connect to the broker: {last_error}")
+            raise last_error
             
         if cert_file or key_file:
             context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
