@@ -2,6 +2,7 @@ from .frame import STOMPFrame, STOMPStream, STOMPError, AckMode
 from socket import socket, AF_INET, SOCK_STREAM
 from .util import to_str, to_bytes
 from pythreader import Primitive, synchronized, Promise
+import ssl
 
 class STOMPSubscription(object):
     
@@ -125,6 +126,7 @@ class STOMPClient(Primitive):
         self.NextID = 1
         self.Subscriptions = {}         # id -> subscription
         self.ReceiptPromises = {}              # receipt-id -> promise
+        self.SSLContext = None
         
     def next_id(self, prefix=""):
         out = self.NextID
@@ -133,7 +135,8 @@ class STOMPClient(Primitive):
         return f"{prefix}{out}"
     
     @synchronized
-    def connect(self, addr_list, login=None, passcode=None, headers={}, timeout=None, **kv_headers):
+    def connect(self, addr_list, login=None, passcode=None, headers={}, timeout=None, 
+            cert_file = None, key_file = None, ca_file = None, key_password = None, **kv_headers):
         """
         Connects to a broker. On successfull connection, sets the following attributes:
         
@@ -159,27 +162,40 @@ class STOMPClient(Primitive):
         for addr in addr_list:
             sock = socket(AF_INET, SOCK_STREAM)
             try:    sock.connect(addr)
-            except: continue
+            except Exception as e: 
+                last_error = e
+                continue
+            else:   break
+        else:
+            raise last_error
             
-            stream = STOMPStream(sock)
+        if cert_file or key_file:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            context.load_cert_chain(cert_file, key_file, password=key_password)
+            if ca_file:
+                context.load_verify_locations(ca_file)
+            sock = context.wrap_socket(sock, server_hostname = addr[0])
+            self.SSLContext = context
             
-            headers = {"accept-version":self.ProtocolVersion}
-            if login is not None:   headers["login"] = login
-            if passcode is not None:   headers["passcode"] = passcode
-            frame = STOMPFrame("CONNECT", headers=headers)
-            stream.send(frame)
-            response = stream.recv(timeout=timeout)
-            if response.Command == "ERROR":
-                last_error = STOMPError(response.get("message", ""), response.Body)
-            elif response.Command != "CONNECTED":
-                last_error = STOMPError(f"Error connecting to the broker. Unknown response command: {response.Command}",
-                    response)
-            else:
-                self.Connected = True
-                self.Stream = stream
-                self.Sock = sock
-                self.BrokerAddress = addr
-                break
+        stream = STOMPStream(sock)
+        
+        headers = {"accept-version":self.ProtocolVersion}
+        if login is not None:   headers["login"] = login
+        if passcode is not None:   headers["passcode"] = passcode
+        frame = STOMPFrame("CONNECT", headers=headers)
+        stream.send(frame)
+        response = stream.recv(timeout=timeout)
+        if response.Command == "ERROR":
+            last_error = STOMPError(response.get("message", ""), response.Body)
+        elif response.Command != "CONNECTED":
+            last_error = STOMPError(f"Error connecting to the broker. Unknown response command: {response.Command}",
+                response)
+        else:
+            self.Connected = True
+            self.Stream = stream
+            self.Sock = sock
+            self.BrokerAddress = addr
+
         if not self.Connected:
             if last_error:  raise last_error
             else:   raise RuntimeError("Failed to connect to a broker")
