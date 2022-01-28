@@ -16,6 +16,7 @@ host, port, dest = args
 port = int(port)
 
 client = connect((host, port))
-client.subscribe(dest)
+client.subscribe(dest, "client")
 for frame in client:
-    print(f"received: {frame.text}")
+    sender = frame.get("sender", "???")
+    print(f"received: {frame.text} from {sender}")

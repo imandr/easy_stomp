@@ -1,4 +1,4 @@
-import time, sys, getopt
+import time, sys, getopt, os
 from pythreader import Primitive
 from stompy import connect
 
@@ -19,4 +19,4 @@ nmessages = int(opts.get("-n", 1))
 
 client = connect((host, port))
 for i in range(nmessages):
-    client.message(dest, f"message #{i}")
+    client.message(dest, f"message #{i}", sender=str(os.getpid()))

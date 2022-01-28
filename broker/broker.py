@@ -37,7 +37,17 @@ class Subscription(Primitive):
         return self.Unacked.pop(ack_id)            # will cause KeyError if not found
         
     def send_message(self, frame):
-        self.Client.send_message(self, frame)
+        headers = frame.headers()       # this will make a copy, so we can modify headers here without affecting the original frame
+        if "message-id" not in headers:
+            headers["message-id"] = self.Client.next_id("m")
+        headers["subscription"] = self.ID
+        if "receipt" in headers:    del headers["receipt"]
+        if self.AckMode != AckMode.Auto:
+            ack_id = self.Client.next_id("a")
+            headers["ack"] = ack_id
+            self.add_unacked(ack_id, frame)
+        msg = STOMPFrame("MESSAGE", frame.Body, headers)
+        self.Client.send(msg)
         
 class Transaction(Primitive):
     def __init__(self, id):
@@ -166,20 +176,6 @@ class Client(Task):
         print(self, ">> sending:", frame)
         self.Writer.send(frame)
     
-    @synchronized
-    def send_message(self, subscription, frame):
-        headers = frame.headers()       # this will make a copy, so we can modify headers here without affecting the original frame
-        if "message-id" not in headers:
-            headers["message-id"] = self.next_id("m")
-        headers["subscription"] = subscription.ID
-        if "receipt" in headers:    del headers["receipt"]
-        if subscription.AckMode != AckMode.Auto:
-            ack_id = self.next_id("a")
-            headers["ack"] = ack_id
-            subscription.add_unacked(ack_id, frame)
-        msg = STOMPFrame("MESSAGE", frame.Body, headers)
-        self.send(msg)
-
     def ack(self, ack_id):
         for s in self.Subscriptions.values():
             try:    return s.ack(ack_id)
@@ -311,7 +307,9 @@ class Broker(PyThread):
     @synchronized
     def add_subscription(self, subscription):
         self.SubscriptionsByDest.setdefault(subscription.Destination, []).append(subscription)
-        for frame in self.Undelivered.get(subscription.Destination, []):
+        undelivered = self.Undelivered.get(subscription.Destination, [])
+        self.Undelivered[subscription.Destination] = []
+        for frame in undelivered:
             self.route(frame)
 
     @synchronized
@@ -320,12 +318,10 @@ class Broker(PyThread):
         try:    lst.remove(subscription)
         except: pass
 
-    @synchronized
     def message_received(self, frame):
         self.route(frame)
         
-    def route(self, frame):
-        dest = frame.destination
+    def route_queue(self, frame, dest):
         subscriptions = self.SubscriptionsByDest.get(dest)
         if subscriptions:
             s = subscriptions.pop(0)        # round-robin
@@ -333,12 +329,26 @@ class Broker(PyThread):
             s.send_message(frame)
         else:
             self.add_undelivered(frame)
+            
+    def route_topic(self, frame, dest):
+        subscriptions = self.SubscriptionsByDest.get(dest, [])
+        for s in subscriptions:
+            s.send_message(frame)
+
+    def route(self, frame):
+        dest = frame.destination
+        if dest.startswith("/topic/"):
+            self.route_topic(frame, dest)
+        else:
+            self.route_queue(frame, dest)
 
     @synchronized
     def nack(self, frame):
         assert frame.Command == "SEND"  # make sure it's the original frame
-        self.route(frame)
-            
+        dest = frame.destination
+        if dest.startswith("/queue/")
+            self.route_queue(frame, dest)
+
     def run(self):
         lsn_sock = socket(AF_INET, SOCK_STREAM)
         lsn_sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
@@ -346,7 +356,7 @@ class Broker(PyThread):
         lsn_sock.listen(5)
         while True:
             conn, addr = lsn_sock.accept()
-            print("Connection accepted from", addr)
+            #print("Connection accepted from", addr)
             self.Clients << Client(self, addr, conn)
 
     @synchronized
