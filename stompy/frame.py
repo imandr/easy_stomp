@@ -1,4 +1,4 @@
-import uuid, time
+import uuid, time, traceback
 from enum import Enum
 from .util import to_str, to_bytes
 from pythreader import Primitive, synchronized
@@ -165,9 +165,11 @@ class STOMPStream(Primitive):
                 if not buf: 
                     try:    
                         buf = self.Sock.recv(self.ReadSize)
+                        #print("Frame.recv: received:", buf)
                     except socket_timeout:
                         raise STOMPTimeout()
                     except:
+                        #print("Frame.recv: error:", traceback.format_exc())
                         buf = b""
                     self.LastHeartBeat = time.time()
                 if not buf: 
