@@ -324,8 +324,7 @@ class Broker(PyThread):
     def message_received(self, frame):
         self.route(frame)
         
-    def route(self, frame):
-        dest = frame.destination
+    def route_queue(self, frame, dest):
         subscriptions = self.SubscriptionsByDest.get(dest)
         if subscriptions:
             s = subscriptions.pop(0)        # round-robin
@@ -333,12 +332,26 @@ class Broker(PyThread):
             s.send_message(frame)
         else:
             self.add_undelivered(frame)
+            
+    def route_topic(self, frame, dest):
+        subscriptions = self.SubscriptionsByDest.get(dest, [])
+        for s in subscriptions:
+            s.send_message(frame)
+
+    def route(self, frame):
+        dest = frame.destination
+        if dest.startswith("/topic/"):
+            self.route_topic(frame, dest)
+        else:
+            self.route_queue(frame, dest)
 
     @synchronized
     def nack(self, frame):
         assert frame.Command == "SEND"  # make sure it's the original frame
-        self.route(frame)
-            
+        dest = frame.destination
+        if dest.startswith("/queue/")
+            self.route_queue(frame, dest)
+
     def run(self):
         lsn_sock = socket(AF_INET, SOCK_STREAM)
         lsn_sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
