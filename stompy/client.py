@@ -13,6 +13,9 @@ class STOMPSubscription(object):
         self.Client = client
         self.SendAcks = send_acks
         
+    def __str__(self):
+        return f"Subscription({self.ID}, dest={self.Destination}, mode={self.AckMode}, send_acks={self.SendAcks})"
+        
     def cancel(self):
         self.Client.unsubscribe(self.ID)
         self.Client = None
@@ -122,7 +125,6 @@ class STOMPClient(Primitive):
         self.Stream = None
         self.NextID = 1
         self.Subscriptions = {}         # id -> subscription
-        self.Callbacks = []
         self.ReceiptPromises = {}              # receipt-id -> promise
         self.SSLContext = None
         
@@ -199,47 +201,6 @@ class STOMPClient(Primitive):
             else:   raise RuntimeError("Failed to connect to a broker")
         return response        
 
-    @synchronized
-    def add_callback(self, callback):
-        """
-        Add callback object to receive message frames during the loop(). The callback object has to be a callable.
-        It will be called with 2 arguments: the STOMPClient instance and the STOMPFrame instance.
-        If the call returns "stop", then the loop will be stopped. All other return values are ignored.
-        
-        .. code-block:: python
-        
-            def my_callback(client, frame):
-                # ...
-                if want_to_stop_loop:
-                    return "stop"
-                else:
-                    return None
-
-            client.add_callback(my_callback)
-            client.loop()
-            # the loop will end if:
-            # - client disconnects or
-            # - a callback returns "stop"
-        
-        :param object callback: callable
-        """
-        self.remove_callback(callback)
-        self.Callbacks.append(callback)
-        
-    @synchronized
-    def remove_callback(self, callback=None):
-        """
-        Remove a single callback object or all callback objects
-        
-        :param object callback: - callable previously added by add_callback() or None. If None, all callback objects will be removed.
-        """
-        
-        if callback is None:
-            self.Callbacks = []
-        else:
-            try:    self.Callbacks.remove(callback)
-            except: pass
-
     def subscribe(self, dest, ack_mode="auto", send_acks=True):
         """
         Subscribe to messages sent to the specified destination
@@ -301,7 +262,7 @@ class STOMPClient(Primitive):
             promise = self.ReceiptPromises[receipt] = Promise(receipt)
         frame = STOMPFrame(command, headers=h, body=to_bytes(body))
         self.Stream.send(frame)
-        print("sent:", frame)
+        #print("sent:", frame)
         return promise
         
     def message(self, destination, body=b"", id=None, headers={}, receipt=False,
@@ -326,11 +287,6 @@ class STOMPClient(Primitive):
             h["message-id"] = id
         return self.send("SEND", headers=h, body=body, destination=destination, 
                 receipt=receipt, transaction=transaction, **kv_headers)
-
-    def callback(self, frame):
-        for cb in self.Callbacks:
-            if cb(self, frame) == "stop":
-                return "stop"
 
     def process_receipt(self, frame):
         if frame.Command == "RECEIPT":
@@ -367,26 +323,27 @@ class STOMPClient(Primitive):
             if frame.Command == "MESSAGE" and "ack" in frame:
                 sub_id = frame["subscription"]
                 subscription = self.Subscriptions.get(sub_id)
+                #print("subscription:", subscription)
                 if subscription is None or subscription.SendAcks:
                     self.ack(frame["ack"], transaction)
             done = True
         return frame
 
-    def loop(self, transaction=None, timeout=None, until=None):
+    def loop(self, transaction=None, timeout=None, callback=None):
         """
-        Run the client in the loop, receiving frames by the broker and sending them to the client callbacks.
-        The loop will break once a callback retruns string "stop"
+        Run the client in the loop, receiving frames from the broker, calling the ``callback``, if not None.
+        The loop will break once the callback retruns string "stop" or the connection closes.
+        
+        :param str transaction: transaction to associate automatic ACKs with, or None
+        :param numeric timeout: read time-out in seconds, or None
+        :param callable callback:
         """
         frame = 1
         while frame is not None:
             frame = self.recv(transaction=transaction, timeout=timeout)
             #print("loop: frame:", frame)
-            if frame is not None:
-                stop = self.callback(frame) == "stop"
-                if not stop and until is not None:
-                    stop = until(frame)
-                    #print("loop(): until->", stop)
-                if stop:    break
+            if (frame is None) or (callback is not None and callback(self, frame) == "stop"):
+                break
         return frame
         
     def nack(self, ack_id, transaction=None):
@@ -430,7 +387,10 @@ class STOMPClient(Primitive):
         """
         if self.Connected:
             promise = self.send("DISCONNECT", receipt=True)
-            self.loop(until = lambda _: promise.is_complete())
+            receipt = promise.Data
+            self.loop(callback = lambda _, frame: 
+                    frame.Command == "RECEIPT" and frame["receipt-id"] == receipt
+            )
             self.close()
 
     @synchronized
@@ -438,7 +398,6 @@ class STOMPClient(Primitive):
         if self.Connected:
             self.Sock.close()
             self.Sock = None
-            self.Callbacks = None
             self.Subscriptions = None
             self.Connected = False
         
