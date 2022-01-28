@@ -53,7 +53,7 @@ class Listener(PyThread):
             elif frame.Command == "ERROR":
                 self.on_error(self.Client, frame)
             else:
-                print("Listener: got unrecognized frame:", frame)
+                pass #ignore
             if self.Stop:
                 self.Client.disconnect()
                 break
