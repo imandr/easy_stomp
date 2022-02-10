@@ -1,8 +1,12 @@
 from .frame import STOMPFrame, STOMPStream, STOMPError, AckMode
 from socket import socket, AF_INET, SOCK_STREAM
 from .util import to_str, to_bytes
-from pythreader import Primitive, synchronized, Promise
+from pythreader import Primitive, synchronized
 import ssl
+
+def wait_for_receipt(client, frame, receipt):
+    if frame is not None or frame.Command == "RECEIPT" and frame.get("receipt-id") == receipt:
+        return receipt
 
 class STOMPSubscription(object):
     
@@ -65,7 +69,7 @@ class STOMPTransaction(object):
             If receipt is a str, it will be used as is.
             If receipt=True, the client will generate new receipt id.
             If receipt=False, do not require a receipt.
-        :return: Promise object if the receipt was requested (``receipt`` was not False), otherwise None
+        :return: receipt (str) the receipt was requested (``receipt`` was not False), otherwise None
         """
         if self.Closed:
             raise STOMPError("Transaction already closed")
@@ -81,7 +85,7 @@ class STOMPTransaction(object):
             If receipt is a str, it will be used as is.
             If receipt=True, the client will generate new receipt id.
             If receipt=False, do not require a receipt.
-        :return: Promise object if the receipt was requested (``receipt`` was not False), otherwise None
+        :return: receipt (str) if the receipt was requested (``receipt`` was not False), otherwise None
         """
         if self.Closed:
             raise STOMPError("Transaction already closed")
@@ -125,7 +129,6 @@ class STOMPClient(Primitive):
         self.Stream = None
         self.NextID = 1
         self.Subscriptions = {}         # id -> subscription
-        self.ReceiptPromises = {}              # receipt-id -> promise
         self.SSLContext = None
         
     def next_id(self, prefix=""):
@@ -235,11 +238,7 @@ class STOMPClient(Primitive):
     def send(self, command, headers={}, body=b"", transaction=None, receipt=False, **kv_headers):
         """
         Send the frame. If a receipt was requested, then the frame sent by the client will incude "receipt" header
-        and the method will return a Promise object, which can be used to wait for the recept to be returned. e.g.:
-        
-            promise = client.send("MESSAGE", body="hello", receipt=True)
-            ...
-            promise.wait() # will block until the message is processed by the broker
+        and the method will return the receipt-id:
         
         :param str command: frame command
         :param dict headers: frame headers, default - {}
@@ -249,21 +248,19 @@ class STOMPClient(Primitive):
             If receipt=True, the client will generate new receipt id.
             If receipt=False, do not require a receipt.
         :param kv_headers: additional headers to add to the frame
-        :return: Promise object if the receipt was requested (``receipt`` was not False), otherwise None
+        :return: receipt (str) if the receipt was requested (``receipt`` was not False), otherwise None
         """
         h = {}
         h.update(headers)
         h.update(kv_headers)
-        promise = None
         if receipt == True:
             receipt = self.next_id("r")
         if receipt:
             h["receipt"] = receipt
-            promise = self.ReceiptPromises[receipt] = Promise(receipt)
         frame = STOMPFrame(command, headers=h, body=to_bytes(body))
         self.Stream.send(frame)
         #print("sent:", frame)
-        return promise
+        return receipt
         
     def message(self, destination, body=b"", id=None, headers={}, receipt=False,
                     transaction=None, **kv_headers):
@@ -279,7 +276,7 @@ class STOMPClient(Primitive):
             If ``receipt`` is True, the client will generate new receipt id.
             If ``receipt`` is False, do not require a receipt.
         :param str transaction: transaction id to associate the frame with, or None
-        :return: Promise object if the receipt was requested (``receipt`` was not False), otherwise None
+        :return: receipt (str) if the receipt was requested (``receipt`` was not False), otherwise None
         """
         h = {}
         h.update(headers)
@@ -289,15 +286,18 @@ class STOMPClient(Primitive):
                 receipt=receipt, transaction=transaction, **kv_headers)
 
     def process_receipt(self, frame):
+        return
+        """ old code
         if frame.Command == "RECEIPT":
             receipt = frame["receipt-id"]
             promise = self.ReceiptPromises.pop(receipt, None)
             if promise is not None:
                 #print("Client.recv: promise fulfilled:", receipt)
                 promise.complete(frame)
-
+        """
+        
     @synchronized
-    def recv(self, transaction=None, timeout=None):
+    def recv(self, transaction=None, timeout=None, exception_on_error=True):
         """
         Receive next frame. If the next frame is RECEIPT, notify those who are waiting for it and keep receiving.
         Return None if the connection closed. Raise STOMPError on ERROR.
@@ -306,46 +306,55 @@ class STOMPClient(Primitive):
         :return: frame received or None, if the connection was closed
         :rtype: STOMPFrame or None
         """
-        done = False
-        frame = None
-        while not done:
-            #print("Client.recv: read...")
-            frame = self.Stream.recv(timeout)
-            #print("Client.recv: received:", frame)
-            if frame is None:
-                # EOF
-                self.close()
-                return None
-            elif frame.Command == "ERROR":
-                raise STOMPError(frame.get("message", ""), frame)
-            elif frame.Command == "RECEIPT":
-                self.process_receipt(frame)
-            if frame.Command == "MESSAGE" and "ack" in frame:
-                sub_id = frame["subscription"]
-                subscription = self.Subscriptions.get(sub_id)
-                #print("subscription:", subscription)
-                if subscription is None or subscription.SendAcks:
-                    self.ack(frame["ack"], transaction)
-            done = True
+        frame = self.Stream.recv(timeout)
+        #print("Client.recv: received:", frame)
+        if frame is None:
+            # EOF
+            self.close()
+            return None
+        elif frame.Command == "ERROR" and exception_on_error:
+            raise STOMPError(frame.get("message", ""), frame)
+        elif frame.Command == "RECEIPT":
+            self.process_receipt(frame)
+        elif frame.Command == "MESSAGE" and "ack" in frame:
+            sub_id = frame["subscription"]
+            subscription = self.Subscriptions.get(sub_id)
+            #print("subscription:", subscription)
+            if subscription is None or subscription.SendAcks:
+                self.ack(frame["ack"], transaction)
         return frame
 
-    def loop(self, transaction=None, timeout=None, callback=None):
+    def loop(self, *params, transaction=None, timeout=None, **callback_args):
         """
-        Run the client in the loop, receiving frames from the broker, calling the ``callback``, if not None.
-        The loop will break once the callback retruns string "stop" or the connection closes.
+        The method can have zero or more positional arguments. First positional arguments will be the ``callback``.
+        The remaining positional arguments will be passed as positional arguments to the ``callback``
+        in addition to client and the frame.
+        Keyword arguments will be passed to the ``callback`` except ``transaction`` and ``timeout``.
+
+        The method will run the client in the loop, receiving frames from the broker, calling the ``callback``, 
+        if present.
+        The loop() will return once the callback (if any) returns something which evaluates to True or the connection closes.
+        The loop() will return the last value returned by the callback or None if the loop stopped due to the
+        disconnection.
         
-        :param str transaction: transaction to associate automatic ACKs with, or None
         :param numeric timeout: read time-out in seconds, or None
-        :param callable callback:
+        :param str transaction: transaction id to associate ACKs and NACKs sent during the loop, or None
+        :return: The value returned by the last call to the ``callback``. If the loop stopped due to 
+            disconnecrtion, returns None
         """
-        frame = 1
-        while frame is not None:
-            frame = self.recv(transaction=transaction, timeout=timeout)
-            #print("loop: frame:", frame)
-            if (frame is None) or (callback is not None and callback(self, frame) == "stop"):
-                break
-        return frame
         
+        callback = None if not params else params[0]
+        callback_params = params[1:]
+        
+        frame = 1
+        value = None
+        while frame is not None and value is None:
+            frame = self.recv(transaction=transaction, timeout=timeout, exception_on_error=False)
+            #print("loop: frame:", frame)
+            if frame is not None and callback is not None:    
+                value = callback(self, frame, *callback_params, **callback_args)
+        return value
+
     def nack(self, ack_id, transaction=None):
         """
         Send NACK frame
@@ -386,11 +395,8 @@ class STOMPClient(Primitive):
         Send DISCONNECT frame, wait for receipt and close the connection.
         """
         if self.Connected:
-            promise = self.send("DISCONNECT", receipt=True)
-            receipt = promise.Data
-            self.loop(callback = lambda _, frame: 
-                    frame.Command == "RECEIPT" and frame["receipt-id"] == receipt
-            )
+            receipt = self.send("DISCONNECT", receipt=True)
+            self.loop(wait_for_receipt, receipt)
             self.close()
 
     @synchronized

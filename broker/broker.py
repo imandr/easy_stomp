@@ -37,7 +37,7 @@ class Subscription(Primitive):
         return self.Unacked.pop(ack_id)            # will cause KeyError if not found
         
     def send_message(self, frame):
-        headers = frame.headers()       # this will make a copy, so we can modify headers here without affecting the original frame
+        headers = frame.headers       # this will make a copy, so we can modify headers here without affecting the original frame
         if "message-id" not in headers:
             headers["message-id"] = self.Client.next_id("m")
         headers["subscription"] = self.ID

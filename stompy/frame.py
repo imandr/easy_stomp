@@ -1,4 +1,4 @@
-import uuid, time
+import time
 from enum import Enum
 from .util import to_str, to_bytes
 from pythreader import Primitive, synchronized
@@ -66,7 +66,10 @@ class FrameParser(object):
                 self.HeadReceived = True
             else:
                 name, value = line.split(":", 1)
-                self.Headers[name] = value
+                name = name.strip()
+                if name not in self.Headers:       
+                    # the 1.2 protocol specs say only first occurance of the header must be used
+                    self.Headers[name] = value.strip()
 
         while buf and not self.BodyReceived:
             if self.RemainingBodyBytes > 0:
@@ -87,6 +90,14 @@ class FrameParser(object):
 class STOMPFrame(object):
     
     def __init__(self, command=None, body=b"", headers=None, **headers_kv):
+        """
+        Initializes STOMP Frame object
+        
+        :param str command: frame command
+        :param str, bytes body: message body
+        :param dict headers: dictionary with frame headers
+        :param keyword headers_kv: keyword arguments will be added to the headers
+        """
         self.Command = command
         self.Body = body
         self.Headers = {}
@@ -106,37 +117,78 @@ class STOMPFrame(object):
         for h, v in self.Headers.items():
             parts.append(f"{h}:{v}")
         return to_bytes("\n".join(parts) + "\n\n") + to_bytes(self.Body) + b"\x00"
-
+        
+    #
+    # Convenience accessors
+    #
     @property
     def destination(self):
+        """
+        Convenience accessor for the frame destination
+        """
+
         return self.Headers["destination"]
         
+    @property
     def headers(self):
+        """
+        Convenience accessor, returns copy of the frame headers dictionary
+        """
         return self.Headers.copy()
 
     @property
-    def text(self, encoding=None):
-        if encoding is None:
-            content_type = self.get("content-type")
-            if content_type and "charset=" in content_type:
-                words = content_type.split(';')
-                for w in words:
-                    w = w.strip()
-                    if w.startswith("charset="):
-                        encoding = w.split('=', 1)[1]
-        encoding = encoding or "utf-8"
-        return self.Body.decode(encoding)
+    def text(self):
+        """
+        Convenience accessor, converting the frame body to text. 
+        Uses the encoding from the content-type header or UTF-8
+        """
+        encoding = None
+        content_type = self.get("content-type")
+        if content_type and "charset=" in content_type:
+            words = content_type.split(';')
+            for w in words:
+                w = w.strip()
+                if w.startswith("charset="):
+                    encoding = w.split('=', 1)[1]
+        return self.Body.decode(encoding or "utf-8")
+        
+    @property
+    def json(self):
+        """
+        Convenience accessor to interpret the frame body as a JSON object
+        """
+        import json
+        return json.loads(self.text)
 
     #
-    # dict interface, headers access
+    # dict interface to headers dict
     #
     def __getitem__(self, name):
+        """
+        Part of mapping interface to the frame headers:
+        
+            value = frame["header-name"]
+        
+        """
         return self.Headers[name]
         
     def get(self, name, default=None):
+        """
+        Part of mapping interface to the frame headers:
+        
+            value = frame.get("header-name", default)
+
+        """
         return self.Headers.get(name, default)
         
     def __contains__(self, name):
+        """
+        Part of mapping interface to the frame headers:
+        
+            if "header-name" in frame:
+                ...
+
+        """
         return name in self.Headers
         
 class STOMPStream(Primitive):
