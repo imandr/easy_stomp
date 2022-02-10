@@ -181,8 +181,9 @@ class STOMPClient(Primitive):
             self.SSLContext = context
             
         stream = STOMPStream(sock)
-        
-        headers = {"accept-version":self.ProtocolVersion}
+       
+        headers = kv_headers.copy() 
+        headers["accept-version"] = self.ProtocolVersion
         if login is not None:   headers["login"] = login
         if passcode is not None:   headers["passcode"] = passcode
         frame = STOMPFrame("CONNECT", headers=headers)
@@ -437,7 +438,7 @@ class MessageIterator(object):
             raise StopIteration()
         return frame
         
-def connect(addr_list, login=None, passcode=None, headers={}):
+def connect(addr_list, **args):
     """
     Creates the client object and connects it to the Broker
     
@@ -449,6 +450,6 @@ def connect(addr_list, login=None, passcode=None, headers={}):
     :rtype: STOMPClient    
     """
     client = STOMPClient()
-    client.connect(addr_list, login=login, passcode=passcode, headers=headers)
+    client.connect(addr_list, **args)
     return client
 

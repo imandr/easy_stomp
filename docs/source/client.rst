@@ -4,8 +4,8 @@ STOMP Client
 STOMPClient is used to connect to and communicate with the message broker. Here is how to create a client object and
 connect it to the Broker:
 
-Using the STOMP Client
-----------------------
+Using STOMP Client
+------------------
 
 Connecting to the Broker
 ~~~~~~~~~~~~~~~~~~~~~~~~
