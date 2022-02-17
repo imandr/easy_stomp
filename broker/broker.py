@@ -346,7 +346,7 @@ class Broker(PyThread):
     def nack(self, frame):
         assert frame.Command == "SEND"  # make sure it's the original frame
         dest = frame.destination
-        if dest.startswith("/queue/")
+        if dest.startswith("/queue/"):
             self.route_queue(frame, dest)
 
     def run(self):
