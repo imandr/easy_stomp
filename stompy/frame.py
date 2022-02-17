@@ -199,6 +199,7 @@ class STOMPStream(Primitive):
         self.Buf = b""
         self.ReadSize = read_size
         self.LastHearbeat = 0
+        self.LastException = None
 
     def send(self, frame):
         self.Sock.sendall(frame.to_bytes())
@@ -220,8 +221,9 @@ class STOMPStream(Primitive):
                         #print("Frame.recv: received:", buf)
                     except socket_timeout:
                         raise STOMPTimeout()
-                    except:
+                    except Exception as e:
                         buf = b""
+                        self.LastException = e
                     self.LastHeartBeat = time.time()
                 if not buf: 
                     eof = True     # eof

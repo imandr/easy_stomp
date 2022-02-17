@@ -189,6 +189,9 @@ class STOMPClient(Primitive):
         frame = STOMPFrame("CONNECT", headers=headers)
         stream.send(frame)
         response = stream.recv(timeout=timeout)
+        if response is None:
+            msg = "Error connecting to the broker" if stream.LastException is None else "Error connecting to the broker: " + str(stream.LastException)
+            raise STOMPError(msg)
         if response.Command == "ERROR":
             last_error = STOMPError(response.get("message", ""), response.Body)
         elif response.Command != "CONNECTED":
@@ -251,6 +254,7 @@ class STOMPClient(Primitive):
         :param kv_headers: additional headers to add to the frame
         :return: receipt (str) if the receipt was requested (``receipt`` was not False), otherwise None
         """
+
         h = {}
         h.update(headers)
         h.update(kv_headers)
@@ -260,7 +264,6 @@ class STOMPClient(Primitive):
             h["receipt"] = receipt
         frame = STOMPFrame(command, headers=h, body=to_bytes(body))
         self.Stream.send(frame)
-        #print("sent:", frame)
         return receipt
         
     def message(self, destination, body=b"", id=None, headers={}, receipt=False,
